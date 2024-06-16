@@ -41,7 +41,7 @@ def create_steering_messages(packer, CP, CAN, enabled, lat_active, apply_steer):
 
   values = {
     "LKA_MODE": 2,
-    "LKA_ICON": 2 if enabled else 1 if lat_active else 0,  # HDA2
+    "LKA_ICON": 2 if lat_active else 1,
     "TORQUE_REQUEST": apply_steer,
     "LKA_ASSIST": 0,
     "STEER_REQ": 1 if lat_active else 0,
@@ -116,12 +116,12 @@ def create_acc_cancel(packer, CP, CAN, cruise_info_copy):
 def create_lfahda_cluster(packer, CAN, enabled, lat_active):
   values = {
     "HDA_ICON": 1 if enabled else 0,
-    "LFA_ICON": 2 if enabled else 1 if lat_active else 0,  # HDA1
+    "LFA_ICON": 2 if lat_active else 0,
   }
   return packer.make_can_msg("LFAHDA_CLUSTER", CAN.ECAN, values)
 
 
-def create_acc_control(packer, CAN, enabled, accel_last, accel, stopping, gas_override, set_speed, hud_control):
+def create_acc_control(packer, CAN, enabled, accel_last, accel, stopping, gas_override, set_speed, personality_profile):
   jerk = 5
   jn = jerk / 50
   if not enabled or gas_override:
@@ -146,7 +146,7 @@ def create_acc_control(packer, CAN, enabled, accel_last, accel, stopping, gas_ov
     "SET_ME_2": 0x4,
     "SET_ME_3": 0x3,
     "SET_ME_TMP_64": 0x64,
-    "DISTANCE_SETTING": hud_control.leadDistanceBars,
+    "DISTANCE_SETTING": personality_profile + 1,
   }
 
   return packer.make_can_msg("SCC_CONTROL", CAN.ECAN, values)
