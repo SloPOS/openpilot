@@ -7,8 +7,7 @@ tqdm>=4.14.0
 pytest
 pytest-mock
 pytest-xdist
-pytest-timeout
-pytest-randomly
+pytest-timeouts
 parameterized
 cffi
 pre-commit

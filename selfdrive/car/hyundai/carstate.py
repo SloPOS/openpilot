@@ -2,7 +2,7 @@ from collections import deque
 import copy
 import math
 
-from cereal import car, custom
+from cereal import car
 from openpilot.common.conversions import Conversions as CV
 from opendbc.can.parser import CANParser
 from opendbc.can.can_define import CANDefine
@@ -10,6 +10,9 @@ from openpilot.selfdrive.car.hyundai.hyundaicanfd import CanBus
 from openpilot.selfdrive.car.hyundai.values import HyundaiFlags, CAR, DBC, CAN_GEARS, CAMERA_SCC_CAR, \
                                                    CANFD_CAR, Buttons, CarControllerParams
 from openpilot.selfdrive.car.interfaces import CarStateBase
+from openpilot.selfdrive.controls.lib.drive_helpers import CRUISE_LONG_PRESS
+
+from openpilot.selfdrive.frogpilot.functions.speed_limit_controller import SpeedLimitController
 
 PREV_BUTTON_SAMPLES = 8
 CLUSTER_SAMPLE_RATE = 20  # frames
@@ -55,10 +58,6 @@ class CarState(CarStateBase):
     # FrogPilot variables
     self.main_enabled = False
 
-    self.active_mode = 0
-    self.drive_mode_prev = 0
-
-  # Traffic signals for Speed Limit Controller - Credit goes to Multikyd!
   def calculate_speed_limit(self, cp, cp_cam):
     if self.CP.carFingerprint in CANFD_CAR:
       speed_limit_bus = cp if self.CP.flags & HyundaiFlags.CANFD_HDA2 else cp_cam
@@ -74,7 +73,6 @@ class CarState(CarStateBase):
       return self.update_canfd(cp, cp_cam, frogpilot_variables)
 
     ret = car.CarState.new_message()
-    fp_ret = custom.FrogPilotCarState.new_message()
     cp_cruise = cp_cam if self.CP.carFingerprint in CAMERA_SCC_CAR else cp
     self.is_metric = cp.vl["CLU11"]["CF_Clu_SPEED_UNIT"] == 0
     speed_conv = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
@@ -185,23 +183,66 @@ class CarState(CarStateBase):
     if self.prev_main_buttons == 0 and self.main_buttons[-1] != 0:
       self.main_enabled = not self.main_enabled
 
-    # FrogPilot carstate functions
-    fp_ret.brakeLights = bool(cp.vl["TCS13"]["BrakeLight"])
+    # FrogPilot functions
+    distance_pressed = self.cruise_buttons[-1] == Buttons.GAP_DIST
 
-    fp_ret.dashboardSpeedLimit = self.calculate_speed_limit(cp, cp_cam) * speed_conv
+    # Driving personalities function
+    if ret.cruiseState.available:
+      # Sync with the onroad UI button
+      if self.fpf.personality_changed_via_ui:
+        self.personality_profile = self.fpf.current_personality
+        self.fpf.reset_personality_changed_param()
 
-    self.prev_distance_button = self.distance_button
-    self.distance_button = self.cruise_buttons[-1] == Buttons.GAP_DIST
+      if distance_pressed:
+        self.distance_pressed_counter += 1
 
-    if self.CP.flags & HyundaiFlags.CAN_LFA_BTN:
-      self.lkas_previously_enabled = self.lkas_enabled
-      self.lkas_enabled = cp.vl["BCM_PO_11"]["LFA_Pressed"]
+      elif self.distance_previously_pressed:
+        # Set the distance lines on the dash to match the new personality if the button was held down for less than 0.5 seconds
+        if self.distance_pressed_counter < CRUISE_LONG_PRESS and frogpilot_variables.personalities_via_wheel:
+          self.personality_profile = (self.personality_profile + 2) % 3
 
-    return ret, fp_ret
+          self.fpf.distance_button_function(self.personality_profile)
+
+        self.distance_pressed_counter = 0
+
+      # Switch the current state of Experimental Mode if the button is held down for 0.5 seconds
+      if self.distance_pressed_counter == CRUISE_LONG_PRESS and frogpilot_variables.experimental_mode_via_distance:
+        if frogpilot_variables.conditional_experimental_mode:
+          self.fpf.update_cestatus_distance()
+        else:
+          self.fpf.update_experimental_mode()
+
+      # Switch the current state of Traffic Mode if the button is held down for 2.5 seconds
+      if self.distance_pressed_counter == CRUISE_LONG_PRESS * 5 and frogpilot_variables.traffic_mode:
+        self.fpf.update_traffic_mode()
+
+        # Revert the previous changes to Experimental Mode
+        if frogpilot_variables.experimental_mode_via_distance:
+          if frogpilot_variables.conditional_experimental_mode:
+            self.fpf.update_cestatus_distance()
+          else:
+            self.fpf.update_experimental_mode()
+
+      self.distance_previously_pressed = distance_pressed
+
+    # Toggle Experimental Mode from steering wheel function
+    if frogpilot_variables.experimental_mode_via_lkas and ret.cruiseState.available and self.CP.flags & HyundaiFlags.CAN_LFA_BTN:
+      lkas_pressed = cp.vl["BCM_PO_11"]["LFA_Pressed"]
+
+      if lkas_pressed and not self.lkas_previously_pressed:
+        if frogpilot_variables.conditional_experimental_mode:
+          self.fpf.update_cestatus_lkas()
+        else:
+          self.fpf.update_experimental_mode()
+      self.lkas_previously_pressed = lkas_pressed
+
+    SpeedLimitController.car_speed_limit = self.calculate_speed_limit(cp, cp_cam) * speed_conv
+    SpeedLimitController.write_car_state()
+
+    return ret
 
   def update_canfd(self, cp, cp_cam, frogpilot_variables):
     ret = car.CarState.new_message()
-    fp_ret = custom.FrogPilotCarState.new_message()
 
     self.is_metric = cp.vl["CRUISE_BUTTONS_ALT"]["DISTANCE_UNIT"] != 1
     speed_factor = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
@@ -283,27 +324,63 @@ class CarState(CarStateBase):
       self.hda2_lfa_block_msg = copy.copy(cp_cam.vl["CAM_0x362"] if self.CP.flags & HyundaiFlags.CANFD_HDA2_ALT_STEERING
                                           else cp_cam.vl["CAM_0x2a4"])
 
-    # FrogPilot carstate functions
-    fp_ret.brakeLights = cp.vl["TCS"]["DriverBraking"] == 1
+    # FrogPilot functions
+    distance_pressed = self.cruise_buttons[-1] == Buttons.GAP_DIST and self.prev_cruise_buttons == 0
 
-    fp_ret.dashboardSpeedLimit = self.calculate_speed_limit(cp, cp_cam) * speed_factor
+    # Driving personalities function
+    if ret.cruiseState.available:
+      # Sync with the onroad UI button
+      if self.fpf.personality_changed_via_ui:
+        self.personality_profile = self.fpf.current_personality
+        self.fpf.reset_personality_changed_param()
 
-    self.prev_distance_button = self.distance_button
-    self.distance_button = self.cruise_buttons[-1] == Buttons.GAP_DIST and self.prev_cruise_buttons == 0
+      if distance_pressed:
+        self.distance_pressed_counter += 1
 
-    drive_mode = cp.vl["DRIVE_MODE"]["DRIVE_MODE2"]
+      elif self.distance_previously_pressed:
+        # Set the distance lines on the dash to match the new personality if the button was held down for less than 0.5 seconds
+        if self.distance_pressed_counter < CRUISE_LONG_PRESS and frogpilot_variables.personalities_via_wheel:
+          self.personality_profile = (self.personality_profile + 2) % 3
 
-    if drive_mode != 0 and drive_mode != self.drive_mode_prev:
-      self.active_mode = drive_mode if drive_mode in (2, 3) else 1
-      self.drive_mode_prev = drive_mode
+          self.fpf.distance_button_function(self.personality_profile)
 
-    fp_ret.ecoGear = self.active_mode == 2
-    fp_ret.sportGear = self.active_mode == 3
+        self.distance_pressed_counter = 0
 
-    self.lkas_previously_enabled = self.lkas_enabled
-    self.lkas_enabled = cp.vl[self.cruise_btns_msg_canfd]["LFA_BTN"]
+      # Switch the current state of Experimental Mode if the button is held down for 0.5 seconds
+      if self.distance_pressed_counter == CRUISE_LONG_PRESS and frogpilot_variables.experimental_mode_via_distance:
+        if frogpilot_variables.conditional_experimental_mode:
+          self.fpf.update_cestatus_distance()
+        else:
+          self.fpf.update_experimental_mode()
 
-    return ret, fp_ret
+      # Switch the current state of Traffic Mode if the button is held down for 2.5 seconds
+      if self.distance_pressed_counter == CRUISE_LONG_PRESS * 5 and frogpilot_variables.traffic_mode:
+        self.fpf.update_traffic_mode()
+
+        # Revert the previous changes to Experimental Mode
+        if frogpilot_variables.experimental_mode_via_distance:
+          if frogpilot_variables.conditional_experimental_mode:
+            self.fpf.update_cestatus_distance()
+          else:
+            self.fpf.update_experimental_mode()
+
+      self.distance_previously_pressed = distance_pressed
+
+    # Toggle Experimental Mode from steering wheel function
+    if frogpilot_variables.experimental_mode_via_lkas and ret.cruiseState.available:
+      lkas_pressed = cp.vl[self.cruise_btns_msg_canfd]["LKAS_BTN"]
+
+      if lkas_pressed and not self.lkas_previously_pressed:
+        if frogpilot_variables.conditional_experimental_mode:
+          self.fpf.update_cestatus_lkas()
+        else:
+          self.fpf.update_experimental_mode()
+      self.lkas_previously_pressed = lkas_pressed
+
+    SpeedLimitController.car_speed_limit = self.calculate_speed_limit(cp, cp_cam) * speed_factor
+    SpeedLimitController.write_car_state()
+
+    return ret
 
   def get_can_parser(self, CP):
     if CP.carFingerprint in CANFD_CAR:
@@ -392,7 +469,6 @@ class CarState(CarStateBase):
       ("CRUISE_BUTTONS_ALT", 50),
       ("BLINKERS", 4),
       ("DOORS_SEATBELTS", 4),
-      ("DRIVE_MODE", 0),
     ]
 
     if CP.flags & HyundaiFlags.EV:

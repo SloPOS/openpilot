@@ -147,6 +147,8 @@ void dos_init(void) {
   // Initialize harness
   harness_init();
 
+  // Initialize RTC
+  rtc_init();
 
   // Enable CAN transceivers
   dos_enable_can_transceivers(true);
@@ -194,6 +196,7 @@ const board board_dos = {
   .has_spi = false,
 #endif
   .has_canfd = false,
+  .has_rtc_battery = true,
   .fan_max_rpm = 6500U,
   .avdd_mV = 3300U,
   .fan_stall_recovery = true,
