@@ -1,12 +1,16 @@
 from cereal import car
+import cereal.messaging as messaging
 from openpilot.common.conversions import Conversions as CV
 from openpilot.common.numpy_fast import clip
+from openpilot.common.params import Params
 from openpilot.common.realtime import DT_CTRL
 from opendbc.can.packer import CANPacker
 from openpilot.selfdrive.car import apply_driver_steer_torque_limits, common_fault_avoidance
 from openpilot.selfdrive.car.hyundai import hyundaicanfd, hyundaican
 from openpilot.selfdrive.car.hyundai.hyundaicanfd import CanBus
-from openpilot.selfdrive.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CANFD_CAR, CAR
+from openpilot.selfdrive.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CANFD_CAR, CAR, LEGACY_SAFETY_MODE_CAR
+from openpilot.selfdrive.car.interfaces import CarControllerBase
+from openpilot.selfdrive.controls.lib.drive_helpers import HYUNDAI_V_CRUISE_MIN
 
 VisualAlert = car.CarControl.HUDControl.VisualAlert
 LongCtrlState = car.CarControl.Actuators.LongControlState
@@ -42,7 +46,7 @@ def process_hud_alert(enabled, fingerprint, hud_control):
   return sys_warning, sys_state, left_lane_warning, right_lane_warning
 
 
-class CarController:
+class CarController(CarControllerBase):
   def __init__(self, dbc_name, CP, VM):
     self.CP = CP
     self.CAN = CanBus(CP)
@@ -131,13 +135,20 @@ class CarController:
           can_sends.extend(hyundaicanfd.create_adrv_messages(self.packer, self.CAN, self.frame))
         if self.frame % 2 == 0:
           can_sends.append(hyundaicanfd.create_acc_control(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
-                                                           set_speed_in_units, CS.personality_profile))
+                                                           set_speed_in_units, hud_control))
           self.accel_last = accel
       else:
         # button presses
         can_sends.extend(self.create_button_messages(CC, CS, use_clu11=False))
+        # CSLC
+        if CC.enabled and not CS.out.gasPressed: #and CS.cruise_buttons == Buttons.NONE:
+          self.cruise_button = self.get_cruise_buttons(CS, CC.vCruise)
+            if self.cruise_button is not None:
+              if self.frame % 2 == 0:
+                can_sends.append(hyundaicanfd.create_buttons(self.packer, self.CP, self.CAN, ((self.frame // 2) + 1) % 0x10, self.cruise_button))
+    
     else:
-      can_sends.append(hyundaican.create_lkas11(self.packer, self.frame, self.car_fingerprint, apply_steer, apply_steer_req,
+      can_sends.append(hyundaican.create_lkas11(self.packer, self.frame, self.CP, apply_steer, apply_steer_req,
                                                 torque_fault, CS.lkas11, sys_warning, sys_state, CC.enabled,
                                                 hud_control.leftLaneVisible, hud_control.rightLaneVisible,
                                                 left_lane_warning, right_lane_warning))
@@ -150,8 +161,8 @@ class CarController:
         jerk = 3.0 if actuators.longControlState == LongCtrlState.pid else 1.0
         use_fca = self.CP.flags & HyundaiFlags.USE_FCA.value
         can_sends.extend(hyundaican.create_acc_commands(self.packer, CC.enabled, accel, jerk, int(self.frame / 2),
-                                                        hud_control.leadVisible, set_speed_in_units, stopping,
-                                                        CC.cruiseControl.override, use_fca, CS.out.cruiseState.available, CS.personality_profile))
+                                                        hud_control, set_speed_in_units, stopping,
+                                                        CC.cruiseControl.override, use_fca, CS.out.cruiseState.available))
 
       # 20 Hz LFA MFA message
       if self.frame % 5 == 0 and self.CP.flags & HyundaiFlags.SEND_LFA.value:
@@ -177,12 +188,12 @@ class CarController:
     can_sends = []
     if use_clu11:
       if CC.cruiseControl.cancel:
-        can_sends.append(hyundaican.create_clu11(self.packer, self.frame, CS.clu11, Buttons.CANCEL, self.CP.carFingerprint))
+        can_sends.append(hyundaican.create_clu11(self.packer, self.frame, CS.clu11, Buttons.CANCEL, self.CP))
       elif CC.cruiseControl.resume:
         # send resume at a max freq of 10Hz
         if (self.frame - self.last_button_frame) * DT_CTRL > 0.1:
           # send 25 messages at a time to increases the likelihood of resume being accepted
-          can_sends.extend([hyundaican.create_clu11(self.packer, self.frame, CS.clu11, Buttons.RES_ACCEL, self.CP.carFingerprint)] * 20)
+          can_sends.extend([hyundaican.create_clu11(self.packer, self.frame, CS.clu11, Buttons.RES_ACCEL, self.CP)] * 20)
           if (self.frame - self.last_button_frame) * DT_CTRL >= 0.15:
             self.last_button_frame = self.frame
     else:
@@ -208,3 +219,122 @@ class CarController:
             self.last_button_frame = self.frame
 
     return can_sends
+
+  # multikyd methods, sunnyhaibin logic
+  def get_cruise_buttons_status(self, CS):
+    if not CS.out.cruiseState.enabled or CS.cruise_buttons[-1] != Buttons.NONE:
+      self.timer = 40
+    elif self.timer:
+      self.timer -= 1
+    else:
+      return 1
+    return 0
+
+  def get_target_speed(self, v_cruise_kph_prev):
+    v_cruise_kph = v_cruise_kph_prev
+    if self.slc_state > 1:
+      v_cruise_kph = (self.speed_limit + self.speed_limit_offset) * CV.MS_TO_KPH
+      if not self.slc_active_stock:
+        v_cruise_kph = v_cruise_kph_prev
+    return v_cruise_kph
+
+  def get_button_type(self, button_type):
+    self.type_status = "type_" + str(button_type)
+    self.button_picker = getattr(self, self.type_status, lambda: "default")
+    return self.button_picker()
+
+  def reset_button(self):
+    if self.button_type != 3:
+      self.button_type = 0
+
+  def type_default(self):
+    self.button_type = 0
+    return None
+
+  def type_0(self):
+    self.button_count = 0
+    self.target_speed = self.init_speed
+    self.speed_diff = self.target_speed - self.v_set_dis
+    if self.target_speed > self.v_set_dis:
+      self.button_type = 1
+    elif self.target_speed < self.v_set_dis and self.v_set_dis > self.v_cruise_min:
+      self.button_type = 2
+    return None
+
+  def type_1(self):
+    cruise_button = Buttons.RES_ACCEL
+    self.button_count += 1
+    if self.target_speed <= self.v_set_dis:
+      self.button_count = 0
+      self.button_type = 3
+    elif self.button_count > 5:
+      self.button_count = 0
+      self.button_type = 3
+    return cruise_button
+
+  def type_2(self):
+    cruise_button = Buttons.SET_DECEL
+    self.button_count += 1
+    if self.target_speed >= self.v_set_dis or self.v_set_dis <= self.v_cruise_min:
+      self.button_count = 0
+      self.button_type = 3
+    elif self.button_count > 5:
+      self.button_count = 0
+      self.button_type = 3
+    return cruise_button
+
+  def type_3(self):
+    cruise_button = None
+    self.button_count += 1
+    if self.button_count > self.t_interval:
+      self.button_type = 0
+    return cruise_button
+
+  def get_curve_speed(self, target_speed_kph, v_cruise_kph_prev):
+    if self.v_tsc_state != 0:
+      vision_v_cruise_kph = self.v_tsc * CV.MS_TO_KPH
+      if int(vision_v_cruise_kph) == int(v_cruise_kph_prev):
+        vision_v_cruise_kph = 255
+    else:
+      vision_v_cruise_kph = 255
+    if self.m_tsc_state > 1:
+      map_v_cruise_kph = self.m_tsc * CV.MS_TO_KPH
+      if int(map_v_cruise_kph) == 0.0:
+        map_v_cruise_kph = 255
+    else:
+      map_v_cruise_kph = 255
+    curve_speed = self.curve_speed_hysteresis(min(vision_v_cruise_kph, map_v_cruise_kph) + 2 * CV.MPH_TO_KPH)
+    return min(target_speed_kph, curve_speed)
+
+  def get_button_control(self, CS, final_speed, v_cruise_kph_prev):
+    self.init_speed = round(min(final_speed, v_cruise_kph_prev) * (CV.KPH_TO_MPH if not self.is_metric else 1))
+    self.v_set_dis = round(CS.out.cruiseState.speed * (CV.MS_TO_MPH if not self.is_metric else CV.MS_TO_KPH))
+    cruise_button = self.get_button_type(self.button_type)
+    return cruise_button
+
+  def curve_speed_hysteresis(self, cur_speed: float, hyst=(0.75 * CV.MPH_TO_KPH)):
+    if cur_speed > self.steady_speed:
+      self.steady_speed = cur_speed
+    elif cur_speed < self.steady_speed - hyst:
+      self.steady_speed = cur_speed
+    return self.steady_speed
+
+  def get_cruise_buttons(self, CS, v_cruise_kph_prev):
+    cruise_button = None
+    if not self.get_cruise_buttons_status(CS):
+      pass
+    elif CS.out.cruiseState.enabled:
+      set_speed_kph = self.get_target_speed(v_cruise_kph_prev)
+      if self.slc_state > 1:
+        target_speed_kph = set_speed_kph
+      else:
+        target_speed_kph = min(v_cruise_kph_prev, set_speed_kph)
+      if self.custom_stock_planner_speed:
+        target_speed_kph = self.curve_speed_hysteresis(self.v_target_plan * CV.MS_TO_KPH)
+      if self.v_tsc_state != 0 or self.m_tsc_state > 1:
+        self.final_speed_kph = self.get_curve_speed(target_speed_kph, v_cruise_kph_prev)
+      else:
+        self.final_speed_kph = target_speed_kph
+
+      cruise_button = self.get_button_control(CS, self.final_speed_kph, v_cruise_kph_prev)  # MPH/KPH based button presses
+    return cruise_button
