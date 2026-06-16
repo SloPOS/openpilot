@@ -4,6 +4,7 @@ import pyray as rl
 from openpilot.common.params import Params
 from openpilot.common.basedir import BASEDIR
 from openpilot.system.ui.widgets import Widget, DialogResult
+from openpilot.system.ui.widgets.script_runner import ScriptRunner
 from openpilot.system.ui.widgets.keyboard import Keyboard
 from openpilot.system.ui.widgets.list_view import (
   toggle_item, multiple_button_item, button_item, text_item,
@@ -18,7 +19,7 @@ from openpilot.selfdrive.ui.layouts.settings.nap_content import (
   BACKUP_EPAS_INSTRUCTIONS, BRAKE_FACTOR_PRESETS,
   CALIBRATE_PEDAL_INSTRUCTIONS, CALIBRATE_RADAR_INSTRUCTIONS,
   FLASH_EPAS_INSTRUCTIONS, PEDAL_CAN_BUS_VALUES,
-  RADAR_OFFSET_MAX, RADAR_OFFSET_MIN,
+  RADAR_OFFSET_MAX, RADAR_OFFSET_MIN, STARTUP_DIAGNOSTICS_INSTRUCTIONS,
   RESTORE_EPAS_INSTRUCTIONS, TEST_RADAR_INSTRUCTIONS,
   acknowledgments_html, find_preset_index,
 )
@@ -242,6 +243,15 @@ class NAPLayout(Widget):
     # ── Section 6: Actions ──
     self._all_items.append(section_header_item("Actions"))
 
+    self._startup_diagnostics_btn = button_item(
+      "Startup Diagnostics",
+      "Run",
+      description="Collect startup/onroad diagnostics without stopping openpilot or rebooting.",
+      callback=self._on_startup_diagnostics,
+    )
+    self._startup_diagnostics_btn.action_item.set_enabled(ui_state.is_offroad)
+    self._all_items.append(self._startup_diagnostics_btn)
+
     self._backup_epas_btn = button_item(
       "Backup EPAS",
       "Extract",
@@ -377,7 +387,24 @@ class NAPLayout(Widget):
         stderr=log_file,
       )
 
+  def _show_live_script_runner(self, title: str, instructions: str, script_module: str):
+    """Run a diagnostic inside the UI so manager/pandad/card keep running."""
+    gui_app.push_widget(ScriptRunner(
+      title=title,
+      instructions=instructions,
+      script_module=script_module,
+      on_close=gui_app.pop_widget,
+      cwd=BASEDIR,
+    ))
+
   # ── Action button callbacks ──
+
+  def _on_startup_diagnostics(self):
+    self._show_live_script_runner(
+      title="Startup Diagnostics",
+      instructions=STARTUP_DIAGNOSTICS_INSTRUCTIONS,
+      script_module="scripts.nap.startup_diagnostics",
+    )
 
   def _on_calibrate_pedal(self):
     self._show_script_runner(

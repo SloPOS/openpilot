@@ -77,6 +77,26 @@ This is useful for:
 Press START to begin the radar test."""
 
 
+STARTUP_DIAGNOSTICS_INSTRUCTIONS = """\
+NAP Startup Diagnostics
+
+This collects startup and onroad-transition diagnostics without stopping
+openpilot and without rebooting.
+
+Before pressing START:
+  1. Leave the car safely parked
+  2. Power the car on normally
+  3. Keep this screen visible until the results appear
+
+The diagnostic checks:
+  - manager, pandad, card, and UI processes
+  - live deviceState.started and pandaStates ignition
+  - live CAN traffic, including Tesla GTW_status 0x348
+  - startup block logs, params, branch, commit, and device info
+
+When it finishes, record a video of the RESULTS section and send it."""
+
+
 FLASH_EPAS_INSTRUCTIONS = """\
 EPAS Firmware Flash
 
