@@ -314,6 +314,21 @@ def collect_logs() -> dict[str, Any]:
   return logs
 
 
+def _count_process_crashes(log_text: str) -> int:
+  """Count log lines that name card/controlsd alongside a real crash marker.
+
+  collect_logs greps /data/log for the literal words "card" and "controlsd",
+  so a bare substring count is always positive on a live device. Require a
+  crash marker on the same line so the finding means something.
+  """
+  crash_markers = ("Traceback", "crashed", "Segmentation", "core dumped", "exited with", "SIGSEGV", "SIGABRT")
+  count = 0
+  for line in log_text.splitlines():
+    if ("card" in line or "controlsd" in line) and any(marker in line for marker in crash_markers):
+      count += 1
+  return count
+
+
 def build_snapshot(sample_seconds: float) -> dict[str, Any]:
   _print("*** Collecting device and git info")
   snapshot: dict[str, Any] = {
@@ -344,7 +359,7 @@ def build_snapshot(sample_seconds: float) -> dict[str, Any]:
   snapshot["logs"] = collect_logs()
   log_text = "\n".join(str(value) for value in snapshot["logs"].values())
   snapshot["startup_blocked"] = "Startup blocked" in log_text
-  snapshot["card_crashes"] = log_text.count("card") + log_text.count("controlsd")
+  snapshot["card_crashes"] = _count_process_crashes(log_text)
   snapshot["findings"] = classify_startup(snapshot)
   return snapshot
 

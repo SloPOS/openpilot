@@ -1,4 +1,4 @@
-from scripts.nap.startup_diagnostics import classify_startup
+from scripts.nap.startup_diagnostics import _count_process_crashes, classify_startup
 
 
 def test_classify_no_panda_states_points_at_panda_layer():
@@ -43,3 +43,23 @@ def test_classify_ignition_without_started_points_at_startup_gate():
   })
 
   assert "STARTUP BLOCKED: ignition is true, but deviceState.started is false." in findings
+
+
+def test_count_process_crashes_ignores_benign_mentions():
+  # collect_logs greps for the words "card"/"controlsd", so normal lines that
+  # merely name the process must not be counted as crashes.
+  benign = "\n".join([
+    "card: published carState",
+    "controlsd: lateral active",
+    "boardd: card heartbeat ok",
+  ])
+  assert _count_process_crashes(benign) == 0
+
+
+def test_count_process_crashes_counts_real_crash_markers():
+  crashing = "\n".join([
+    "card: published carState",
+    "Traceback (most recent call last): in card",
+    "controlsd exited with code 1",
+  ])
+  assert _count_process_crashes(crashing) == 2
