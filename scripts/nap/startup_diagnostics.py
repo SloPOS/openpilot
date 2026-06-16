@@ -52,7 +52,11 @@ PROCESS_PATTERNS = {
   "card": ("selfdrive.car.card",),
   "controlsd": ("selfdrive.controls.controlsd",),
   "ui": ("selfdrive.ui.ui",),
+  "camerad": ("./camerad", "system/camerad"),
+  "dmonitoringmodeld": ("selfdrive.modeld.dmonitoringmodeld",),
 }
+
+CAMERA_SERVICES = ["roadCameraState", "driverCameraState", "wideRoadCameraState"]
 
 
 def _print(line: str = "") -> None:
@@ -161,6 +165,18 @@ def classify_startup(snapshot: dict[str, Any]) -> list[str]:
 
   if bool(device_state.get("started")):
     findings.append("STARTED TRUE: deviceState.started is true. If UI is still home, this is likely a UI/display issue.")
+
+  cam_received = (snapshot.get("cameras") or {}).get("received") or {}
+  if processes.get("camerad"):
+    road_frames = cam_received.get("roadCameraState", 0)
+    driver_frames = cam_received.get("driverCameraState", 0)
+    if road_frames and not driver_frames:
+      findings.append(
+        "DRIVER CAMERA DOWN: camerad is up and the road camera is publishing, but driverCameraState "
+        + "has no frames. The driver/interior sensor likely failed to probe (a covered lens does NOT cause this)."
+      )
+    elif not road_frames and not driver_frames:
+      findings.append("NO CAMERA FRAMES: camerad is up but no camera states are publishing.")
 
   if not findings:
     findings.append("NO CLEAR FAILURE: send the video and saved diagnostics bundle path.")
@@ -280,6 +296,39 @@ def collect_can(sample_seconds: float) -> dict[str, Any]:
   return can
 
 
+def collect_cameras(sample_seconds: float) -> dict[str, Any]:
+  """Sample the camera state messages to see which cameras are publishing frames.
+
+  Only meaningful while camerad is running (onroad / driver view); offroad the
+  cameras are off and this is expected to be empty. The persisted camerad log is
+  the reliable signal when running offroad.
+  """
+  cameras: dict[str, Any] = {"received": {}, "sensor": {}, "alive": {}, "errors": []}
+  try:
+    import cereal.messaging as messaging
+
+    sm = messaging.SubMaster(CAMERA_SERVICES)
+    counts: Counter[str] = Counter()
+    deadline = time.monotonic() + sample_seconds
+    while time.monotonic() < deadline:
+      sm.update(100)
+      for service in CAMERA_SERVICES:
+        if sm.updated[service]:
+          counts[service] += 1
+
+    for service in CAMERA_SERVICES:
+      cameras["received"][service] = counts[service]
+      if counts[service] > 0:
+        try:
+          cameras["sensor"][service] = str(sm[service].sensor)
+        except Exception:
+          pass
+    cameras["alive"] = {service: bool(sm.alive[service]) for service in CAMERA_SERVICES}
+  except Exception as e:
+    cameras["errors"].append(f"{type(e).__name__}: {e}")
+  return cameras
+
+
 def collect_logs() -> dict[str, Any]:
   logs: dict[str, Any] = {}
   log_paths = ["/tmp/launch_log", "/tmp/nap_script_runner.log"]
@@ -311,6 +360,13 @@ def collect_logs() -> dict[str, Any]:
     if grep_output:
       lines = grep_output.splitlines()
       logs["data_log_matches_tail"] = "\n".join(lines[-160:])
+
+    # camerad / sensor probe failures (why a camera is not outputting frames)
+    cam_patterns = ["camerad", "sensor", "CSIError", "probe", "no devices", "v4l", "ife", "MIPI"]
+    cam_cmd = ["grep", "-RInaiE", "|".join(cam_patterns), search_root]
+    _, cam_output = _run(cam_cmd, timeout=8.0)
+    if cam_output:
+      logs["camera_log_matches_tail"] = "\n".join(cam_output.splitlines()[-100:])
   return logs
 
 
@@ -355,6 +411,9 @@ def build_snapshot(sample_seconds: float) -> dict[str, Any]:
   _print(f"*** Sampling live CAN for {sample_seconds:.0f}s")
   snapshot["can"] = collect_can(sample_seconds)
 
+  _print(f"*** Sampling live cameras for {sample_seconds:.0f}s")
+  snapshot["cameras"] = collect_cameras(sample_seconds)
+
   _print("*** Collecting recent logs")
   snapshot["logs"] = collect_logs()
   log_text = "\n".join(str(value) for value in snapshot["logs"].values())
@@ -396,6 +455,7 @@ def render_report(snapshot: dict[str, Any]) -> str:
     "manager_state",
     "peripheral_state",
     "can",
+    "cameras",
   ]:
     lines.append(section.upper())
     value = snapshot.get(section)
@@ -451,6 +511,9 @@ def print_video_summary(snapshot: dict[str, Any], report_path: Path) -> None:
   _print(f"  pandaStates: {snapshot.get('panda_states')}")
   _print(f"  CAN frames by bus: {_safe_get(snapshot, 'can', 'frames_by_bus')}")
   _print(f"  GTW 0x348 by bus: {_safe_get(snapshot, 'can', 'gtw_348_by_bus')}")
+  _print(f"  camerad: {_safe_get(snapshot, 'processes', 'camerad')}")
+  _print(f"  camera frames: {_safe_get(snapshot, 'cameras', 'received')}")
+  _print(f"  camera sensors: {_safe_get(snapshot, 'cameras', 'sensor')}")
   _print("")
   _print("Leave this screen visible and send a video of these results.")
 

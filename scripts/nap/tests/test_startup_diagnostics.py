@@ -83,6 +83,33 @@ def test_render_logs_view_shows_findings_and_error_logs():
   assert "/data/nap_diagnostics/startup_diag_x.txt" in out
 
 
+def test_classify_driver_camera_down_when_road_ok_but_driver_dead():
+  findings = classify_startup({
+    "processes": {"manager": True, "pandad": True, "camerad": True},
+    "device_state": {"started": True},
+    "panda_states": [{"ignitionCan": True, "pandaType": "tres"}],
+    "can": {"total_frames": 100, "gtw_348_by_bus": {0: 10}},
+    "cameras": {"received": {"roadCameraState": 120, "driverCameraState": 0, "wideRoadCameraState": 120}},
+    "startup_blocked": False,
+    "card_crashes": 0,
+  })
+  assert any("DRIVER CAMERA DOWN" in f for f in findings)
+
+
+def test_classify_no_camera_finding_when_camerad_not_running():
+  # Offroad camerad is off; absent camera frames are normal, not a malfunction.
+  findings = classify_startup({
+    "processes": {"manager": True, "pandad": True, "camerad": False},
+    "device_state": {"started": False},
+    "panda_states": [{"ignitionCan": True, "pandaType": "tres"}],
+    "can": {"total_frames": 100, "gtw_348_by_bus": {0: 10}},
+    "cameras": {"received": {}},
+    "startup_blocked": False,
+    "card_crashes": 0,
+  })
+  assert not any("CAMERA" in f for f in findings)
+
+
 def test_render_logs_view_handles_no_logs():
   out = render_logs_view({"findings": ["NO CLEAR FAILURE"], "logs": {}}, Path("/tmp/x.txt"))
   assert "(no logs collected)" in out
