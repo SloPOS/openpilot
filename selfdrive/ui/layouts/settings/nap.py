@@ -4,7 +4,7 @@ import pyray as rl
 from openpilot.common.params import Params
 from openpilot.common.basedir import BASEDIR
 from openpilot.system.ui.widgets import Widget, DialogResult
-from openpilot.system.ui.widgets.script_runner import ScriptAction, ScriptActionRunner, ScriptRunner
+from openpilot.system.ui.widgets.script_runner import ScriptAction, ScriptActionRunner
 from openpilot.system.ui.widgets.button import ButtonStyle
 from openpilot.system.ui.widgets.keyboard import Keyboard
 from openpilot.system.ui.widgets.list_view import (
@@ -371,24 +371,22 @@ class NAPLayout(Widget):
         stderr=log_file,
       )
 
-  def _show_live_script_runner(self, title: str, instructions: str, script_module: str):
-    """Run a diagnostic inside the UI so manager/pandad/card keep running."""
-    gui_app.push_widget(ScriptRunner(
-      title=title,
-      instructions=instructions,
-      script_module=script_module,
-      on_close=gui_app.pop_widget,
-      cwd=BASEDIR,
-    ))
-
   # ── Action button callbacks ──
 
   def _on_startup_diagnostics(self):
-    self._show_live_script_runner(
+    # Read-only: no manage_openpilot, so manager/pandad/card keep running while
+    # this samples live messages and CAN. Summary shows the quick state; Logs
+    # shows the same findings plus the recent error logs to capture the reason.
+    gui_app.push_widget(ScriptActionRunner(
       title="Startup Diagnostics",
       instructions=STARTUP_DIAGNOSTICS_INSTRUCTIONS,
-      script_module="scripts.nap.startup_diagnostics",
-    )
+      actions=[
+        ScriptAction("Summary", "scripts.nap.startup_diagnostics", allow_stop=True),
+        ScriptAction("Logs", "scripts.nap.startup_diagnostics", args=("--logs",), allow_stop=True),
+      ],
+      on_close=gui_app.pop_widget,
+      cwd=BASEDIR,
+    ))
 
   def _on_calibrate_pedal(self):
     self._show_script_runner(

@@ -400,6 +400,7 @@ class ScriptAction:
   manage_openpilot: bool = False
   accept_epas_risk: bool = False
   allow_stop: bool = False
+  args: tuple[str, ...] = ()
 
 
 class ScriptActionRunner(Widget):
@@ -506,7 +507,7 @@ class ScriptActionRunner(Widget):
         self._params.put_bool(EPAS_RISK_ACK_PARAM, True)
 
       self._process = subprocess.Popen(
-        ["python", "-m", action.script_module],
+        ["python", "-m", action.script_module, *action.args],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         cwd=self._cwd,

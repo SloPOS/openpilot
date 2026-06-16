@@ -1,4 +1,6 @@
-from scripts.nap.startup_diagnostics import _count_process_crashes, classify_startup
+from pathlib import Path
+
+from scripts.nap.startup_diagnostics import _count_process_crashes, classify_startup, render_logs_view
 
 
 def test_classify_no_panda_states_points_at_panda_layer():
@@ -63,3 +65,24 @@ def test_count_process_crashes_counts_real_crash_markers():
     "controlsd exited with code 1",
   ])
   assert _count_process_crashes(crashing) == 2
+
+
+def test_render_logs_view_shows_findings_and_error_logs():
+  snapshot = {
+    "findings": ["NO PANDA STATE: manager is up, but pandaStates is empty."],
+    "logs": {
+      "/tmp/launch_log": "booting...",
+      "data_log_matches_tail": "Traceback (most recent call last):\n  card crashed",
+    },
+  }
+  out = render_logs_view(snapshot, Path("/data/nap_diagnostics/startup_diag_x.txt"))
+
+  assert "NO PANDA STATE: manager is up, but pandaStates is empty." in out
+  assert "--- data_log_matches_tail ---" in out
+  assert "Traceback" in out
+  assert "/data/nap_diagnostics/startup_diag_x.txt" in out
+
+
+def test_render_logs_view_handles_no_logs():
+  out = render_logs_view({"findings": ["NO CLEAR FAILURE"], "logs": {}}, Path("/tmp/x.txt"))
+  assert "(no logs collected)" in out

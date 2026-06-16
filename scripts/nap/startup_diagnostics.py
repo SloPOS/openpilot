@@ -455,10 +455,37 @@ def print_video_summary(snapshot: dict[str, Any], report_path: Path) -> None:
   _print("Leave this screen visible and send a video of these results.")
 
 
-def main() -> int:
+def render_logs_view(snapshot: dict[str, Any], report_path: Path) -> str:
+  """Findings followed by the collected logs — the on-screen 'why it failed' view.
+
+  Findings go on top (plain-English reason); the raw logs go last so the screen,
+  which auto-scrolls to the bottom, frames the most recent error lines for video.
+  """
+  lines: list[str] = []
+  lines.append("*** RESULTS")
+  lines.extend(f"- {finding}" for finding in snapshot["findings"])
+  lines.append("")
+  lines.append(f"Saved report: {report_path}")
+  lines.append("")
+  lines.append("*** LOGS")
+  logs = snapshot.get("logs") or {}
+  if not logs:
+    lines.append("  (no logs collected)")
+  for name, content in logs.items():
+    lines.append("")
+    lines.append(f"--- {name} ---")
+    lines.append(str(content))
+  lines.append("")
+  lines.append("Leave this screen visible and send a video of these results.")
+  return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("--sample-seconds", type=float, default=6.0)
-  args = parser.parse_args()
+  parser.add_argument("--logs", action="store_true",
+                      help="print collected error logs instead of the quick-state summary")
+  args = parser.parse_args(argv)
 
   _print("NAP Startup Diagnostics")
   _print("Keep the car powered on and leave the device on this screen.")
@@ -467,7 +494,10 @@ def main() -> int:
   snapshot = build_snapshot(max(1.0, args.sample_seconds))
   report = render_report(snapshot)
   report_path = save_report(report)
-  print_video_summary(snapshot, report_path)
+  if args.logs:
+    _print(render_logs_view(snapshot, report_path))
+  else:
+    print_video_summary(snapshot, report_path)
   return 0
 
 

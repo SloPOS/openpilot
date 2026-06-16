@@ -83,10 +83,12 @@ NAP Startup Diagnostics
 This collects startup and onroad-transition diagnostics without stopping
 openpilot and without rebooting.
 
-Before pressing START:
-  1. Leave the car safely parked
-  2. Power the car on normally
-  3. Keep this screen visible until the results appear
+Keep the car parked and powered on, and leave this screen visible until
+the results appear.
+
+  Summary - key state and findings
+  Logs    - the same findings plus recent error logs (use this to capture
+            why it is not going onroad)
 
 The diagnostic checks:
   - manager, pandad, card, and UI processes
@@ -94,7 +96,7 @@ The diagnostic checks:
   - live CAN traffic, including Tesla GTW_status 0x348
   - startup block logs, params, branch, commit, and device info
 
-When it finishes, record a video of the RESULTS section and send it."""
+When the results appear, record a video of the screen and send it."""
 
 
 FLASH_EPAS_INSTRUCTIONS = """\
