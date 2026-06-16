@@ -5,6 +5,7 @@ Full-screen overlay for executing and displaying script output.
 Provides instructions, start button, live output, and exit functionality.
 """
 
+import os
 import subprocess
 import threading
 import queue
@@ -28,6 +29,19 @@ BUTTON_HEIGHT = 120
 BUTTON_SPACING = 30
 GROUPED_BUTTON_WIDTH = 330
 EPAS_RISK_ACK_PARAM = "NAPEpasRiskAccepted"
+
+
+def drain_stream_to_queue(stream, out_queue) -> None:
+  """Read a text stream to EOF, pushing each non-empty line (stripped) to out_queue.
+
+  Reads until readline() returns '' (true EOF). It must NOT stop once the process
+  is merely seen as exited: the pipe can still hold the script's final output
+  burst after the process is gone, and stopping there truncates it. That was the
+  startup-diagnostics bug where RESULTS never appeared on screen.
+  """
+  for line in iter(stream.readline, ''):
+    if line:
+      out_queue.put(line.rstrip())
 
 
 class ScriptState:
@@ -137,6 +151,7 @@ class ScriptRunner(Widget):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         cwd=self._cwd,
+        env={**os.environ, "PWD": self._cwd},  # match cwd so capnp/kj doesn't warn
         text=True,
         bufsize=1  # Line buffered
       )
@@ -153,11 +168,7 @@ class ScriptRunner(Widget):
     """Read script output in background thread"""
     try:
       if self._process and self._process.stdout:
-        for line in iter(self._process.stdout.readline, ''):
-          if line:
-            self._output_queue.put(line.rstrip())
-          if self._process.poll() is not None:
-            break
+        drain_stream_to_queue(self._process.stdout, self._output_queue)
 
       # Wait for process to complete
       if self._process:
@@ -499,6 +510,7 @@ class ScriptActionRunner(Widget):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         cwd=self._cwd,
+        env={**os.environ, "PWD": self._cwd},  # match cwd so capnp/kj doesn't warn
         text=True,
         bufsize=1,
       )
@@ -510,11 +522,7 @@ class ScriptActionRunner(Widget):
   def _read_output(self, action: ScriptAction):
     try:
       if self._process and self._process.stdout:
-        for line in iter(self._process.stdout.readline, ''):
-          if line:
-            self._output_queue.put(line.rstrip())
-          if self._process.poll() is not None:
-            break
+        drain_stream_to_queue(self._process.stdout, self._output_queue)
 
       if self._process:
         return_code = self._process.wait()
