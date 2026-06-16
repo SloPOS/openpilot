@@ -4,7 +4,8 @@ import pyray as rl
 from openpilot.common.params import Params
 from openpilot.common.basedir import BASEDIR
 from openpilot.system.ui.widgets import Widget, DialogResult
-from openpilot.system.ui.widgets.script_runner import ScriptRunner
+from openpilot.system.ui.widgets.script_runner import ScriptAction, ScriptActionRunner, ScriptRunner
+from openpilot.system.ui.widgets.button import ButtonStyle
 from openpilot.system.ui.widgets.keyboard import Keyboard
 from openpilot.system.ui.widgets.list_view import (
   toggle_item, multiple_button_item, button_item, text_item,
@@ -16,12 +17,9 @@ from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.text_measure import measure_text_cached
 from openpilot.system.ui.widgets.html_render import HtmlRenderer, ElementType
 from openpilot.selfdrive.ui.layouts.settings.nap_content import (
-  BACKUP_EPAS_INSTRUCTIONS, BRAKE_FACTOR_PRESETS,
-  CALIBRATE_PEDAL_INSTRUCTIONS, CALIBRATE_RADAR_INSTRUCTIONS,
-  FLASH_EPAS_INSTRUCTIONS, PEDAL_CAN_BUS_VALUES,
-  RADAR_OFFSET_MAX, RADAR_OFFSET_MIN, STARTUP_DIAGNOSTICS_INSTRUCTIONS,
-  RESTORE_EPAS_INSTRUCTIONS, TEST_RADAR_INSTRUCTIONS,
-  acknowledgments_html, find_preset_index,
+  BRAKE_FACTOR_PRESETS, CALIBRATE_PEDAL_INSTRUCTIONS,
+  PEDAL_CAN_BUS_VALUES, RADAR_OFFSET_MAX, RADAR_OFFSET_MIN,
+  STARTUP_DIAGNOSTICS_INSTRUCTIONS, acknowledgments_html, find_preset_index,
 )
 from opendbc.car.tesla.preap.nap_params import NAPParamKeys, DEFAULTS
 from openpilot.selfdrive.ui.ui_state import ui_state
@@ -30,7 +28,7 @@ from openpilot.selfdrive.ui.ui_state import ui_state
 class SectionHeader(Widget):
   """Lightweight section label to visually separate groups of settings."""
 
-  HEADER_HEIGHT = 70
+  HEADER_HEIGHT = 82
 
   def __init__(self, title: str):
     super().__init__()
@@ -43,12 +41,21 @@ class SectionHeader(Widget):
     self._rect.width = parent_rect.width
 
   def _render(self, rect):
-    text_size = measure_text_cached(self._font, self._title, 40)
+    text_size = measure_text_cached(self._font, self._title, 42)
     text_y = self._rect.y + (self._rect.height - text_size.y) / 2
+    text_x = self._rect.x + ITEM_PADDING
     rl.draw_text_ex(
       self._font, self._title,
-      rl.Vector2(self._rect.x + ITEM_PADDING, text_y),
-      40, 0, rl.Color(180, 180, 180, 255),
+      rl.Vector2(text_x, text_y),
+      42, 0, rl.Color(190, 190, 190, 255),
+    )
+    line_x = text_x + text_size.x + 30
+    line_y = self._rect.y + self._rect.height / 2
+    rl.draw_line_ex(
+      rl.Vector2(line_x, line_y),
+      rl.Vector2(self._rect.x + self._rect.width - ITEM_PADDING, line_y),
+      2,
+      rl.Color(92, 92, 92, 255),
     )
 
 
@@ -188,23 +195,16 @@ class NAPLayout(Widget):
     )
     self._all_items.append(self._radar_offset_btn)
 
-    self._calibrate_radar_btn = button_item(
-      "Calibrate Radar",
-      "Start",
-      description="Run the radar calibration routine.",
-      callback=self._on_calibrate_radar,
+    self._radar_tools_btn = button_item(
+      "Radar Tools",
+      "Open",
+      description=(
+        "Open live radar calibration and test views. These read openpilot's live radar output "
+        + "without stopping manager, pandad, card, or controlsd."
+      ),
+      callback=self._on_radar_tools,
     )
-    self._calibrate_radar_btn.action_item.set_enabled(ui_state.is_offroad)
-    self._all_items.append(self._calibrate_radar_btn)
-
-    self._test_radar_btn = button_item(
-      "Test Radar",
-      "Test",
-      description="Test radar connectivity and verify signals.",
-      callback=self._on_test_radar,
-    )
-    self._test_radar_btn.action_item.set_enabled(ui_state.is_offroad)
-    self._all_items.append(self._test_radar_btn)
+    self._all_items.append(self._radar_tools_btn)
 
     # ── Section 4: iBooster / Braking (not yet implemented — grayed out) ──
     self._all_items.append(section_header_item("iBooster / Braking"))
@@ -252,32 +252,16 @@ class NAPLayout(Widget):
     self._startup_diagnostics_btn.action_item.set_enabled(ui_state.is_offroad)
     self._all_items.append(self._startup_diagnostics_btn)
 
-    self._backup_epas_btn = button_item(
-      "Backup EPAS",
-      "Extract",
-      description="Extract and save stock EPAS firmware image without flashing.",
-      callback=self._on_backup_epas,
+    self._epas_firmware_btn = button_item(
+      "EPAS Firmware",
+      "Open",
+      description=(
+        "Open EPAS firmware tools. Backup, flash, and restore run in one screen "
+        + "and return here when finished; reboot is available as a fallback."
+      ),
+      callback=self._on_epas_firmware,
     )
-    self._backup_epas_btn.action_item.set_enabled(ui_state.is_offroad)
-    self._all_items.append(self._backup_epas_btn)
-
-    self._flash_epas_btn = button_item(
-      "Flash EPAS",
-      "Flash",
-      description="Flash the EPAS (Electric Power Assisted Steering) firmware.",
-      callback=self._on_flash_epas,
-    )
-    self._flash_epas_btn.action_item.set_enabled(ui_state.is_offroad)
-    self._all_items.append(self._flash_epas_btn)
-
-    self._restore_epas_btn = button_item(
-      "Restore EPAS",
-      "Restore",
-      description="Restore stock EPAS firmware image.",
-      callback=self._on_restore_epas,
-    )
-    self._restore_epas_btn.action_item.set_enabled(ui_state.is_offroad)
-    self._all_items.append(self._restore_epas_btn)
+    self._all_items.append(self._epas_firmware_btn)
 
     self._emergency_disable_btn = button_item(
       "Emergency Disable",
@@ -413,40 +397,59 @@ class NAPLayout(Widget):
       script_module="scripts.nap.calibrate_pedal",
     )
 
-  def _on_calibrate_radar(self):
-    self._show_script_runner(
-      title="Radar Calibration",
-      instructions=CALIBRATE_RADAR_INSTRUCTIONS,
-      script_module="scripts.nap.calibrate_radar",
-    )
+  def _on_radar_tools(self):
+    instructions = "\n\n".join((
+      "These tools read openpilot's live radar track output and do not take direct control of the Panda.",
+      "Calibration shows only tracks in the target window near the front centerline. Test shows all live tracks.",
+      (
+        "Because openpilot keeps running, this can be used during development with the car powered on. "
+        + "Do not let the driver watch or operate this while driving."
+      ),
+    ))
+    gui_app.push_widget(ScriptActionRunner(
+      title="Radar Tools",
+      instructions=instructions,
+      actions=[
+        ScriptAction("Calibrate", "scripts.nap.live_radar_calibrate", allow_stop=True),
+        ScriptAction("Test", "scripts.nap.live_radar_test", allow_stop=True),
+      ],
+      on_close=gui_app.pop_widget,
+      cwd=BASEDIR,
+    ))
 
-  def _on_test_radar(self):
-    self._show_script_runner(
-      title="Radar Test",
-      instructions=TEST_RADAR_INSTRUCTIONS,
-      script_module="scripts.nap.test_radar",
-    )
-
-  def _on_flash_epas(self):
-    self._show_script_runner(
-      title="Flash EPAS Firmware",
-      instructions=FLASH_EPAS_INSTRUCTIONS,
-      script_module="scripts.nap.flash_epas",
-    )
-
-  def _on_backup_epas(self):
-    self._show_script_runner(
-      title="Backup EPAS Firmware",
-      instructions=BACKUP_EPAS_INSTRUCTIONS,
-      script_module="scripts.nap.extract_epas",
-    )
-
-  def _on_restore_epas(self):
-    self._show_script_runner(
-      title="Restore EPAS Firmware",
-      instructions=RESTORE_EPAS_INSTRUCTIONS,
-      script_module="scripts.nap.restore_epas",
-    )
+  def _on_epas_firmware(self):
+    instructions = "\n\n".join((
+      "Use this only while parked with the car powered on and stable 12V power available.",
+      "Backup extracts the current EPAS firmware and does not write to the ECU. Flash patches "
+      + "the EPAS firmware for steering control. Restore writes the saved stock firmware image "
+      + "back to the EPAS.",
+      "Run Backup before Flash or Restore. While a tool runs, openpilot releases the Panda so "
+      + "the script can talk to the EPAS directly. When the tool exits, openpilot resumes without "
+      + "requiring a device reboot. Use Reboot only if the vehicle or device does not recover cleanly.",
+    ))
+    gui_app.push_widget(ScriptActionRunner(
+      title="EPAS Firmware",
+      instructions=instructions,
+      actions=[
+        ScriptAction("Backup", "scripts.nap.extract_epas", manage_openpilot=True),
+        ScriptAction(
+          "Flash",
+          "scripts.nap.flash_epas",
+          button_style=ButtonStyle.DANGER,
+          manage_openpilot=True,
+          accept_epas_risk=True,
+        ),
+        ScriptAction(
+          "Restore",
+          "scripts.nap.restore_epas",
+          button_style=ButtonStyle.DANGER,
+          manage_openpilot=True,
+          accept_epas_risk=True,
+        ),
+      ],
+      on_close=gui_app.pop_widget,
+      cwd=BASEDIR,
+    ))
 
   def _show_reboot_modal(self):
     """Show a modal prompting the user to reboot for the change to take effect."""

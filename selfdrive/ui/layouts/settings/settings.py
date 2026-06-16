@@ -52,6 +52,14 @@ class SettingsLayout(Widget):
   def __init__(self):
     super().__init__()
     self._current_panel = PanelType.DEVICE
+    self._sidebar_panels = (
+      PanelType.DEVICE,
+      PanelType.NETWORK,
+      PanelType.TOGGLES,
+      PanelType.SOFTWARE,
+      PanelType.FIREHOSE,
+      PanelType.DEVELOPER,
+    )
 
     # Panel configuration
     wifi_manager = WifiManager()
@@ -60,9 +68,9 @@ class SettingsLayout(Widget):
     self._panels = {
       PanelType.DEVICE: PanelInfo(tr_noop("Device"), DeviceLayout()),
       PanelType.NETWORK: PanelInfo(tr_noop("Network"), NetworkUI(wifi_manager)),
-      PanelType.TOGGLES: PanelInfo(tr_noop("Toggles"), TogglesLayout()),
+      PanelType.TOGGLES: PanelInfo(tr_noop("Toggles"), TogglesLayout(open_preap_settings=self.open_preap_settings)),
       PanelType.SOFTWARE: PanelInfo(tr_noop("Software"), SoftwareLayout()),
-      PanelType.NAP: PanelInfo(tr_noop("NAP"), NAPLayout()),
+      PanelType.NAP: PanelInfo(tr_noop("Pre-AP"), NAPLayout()),
       PanelType.FIREHOSE: PanelInfo(tr_noop("Firehose"), FirehoseLayout()),
       PanelType.DEVELOPER: PanelInfo(tr_noop("Developer"), DeveloperLayout()),
     }
@@ -119,11 +127,13 @@ class SettingsLayout(Widget):
 
     # Navigation buttons
     y = rect.y + 300
-    for panel_type, panel_info in self._panels.items():
+    selected_panel = PanelType.TOGGLES if self._current_panel == PanelType.NAP else self._current_panel
+    for panel_type in self._sidebar_panels:
+      panel_info = self._panels[panel_type]
       button_rect = rl.Rectangle(rect.x + 50, y, rect.width - 150, NAV_BTN_HEIGHT)
 
       # Button styling
-      is_selected = panel_type == self._current_panel
+      is_selected = panel_type == selected_panel
       text_color = TEXT_SELECTED if is_selected else TEXT_NORMAL
       # Draw button text (right-aligned)
       panel_name = tr(panel_info.name)
@@ -156,7 +166,8 @@ class SettingsLayout(Widget):
       return
 
     # Check navigation buttons
-    for panel_type, panel_info in self._panels.items():
+    for panel_type in self._sidebar_panels:
+      panel_info = self._panels[panel_type]
       if rl.check_collision_point_rec(mouse_pos, panel_info.button_rect):
         self.set_current_panel(panel_type)
         return
@@ -166,6 +177,9 @@ class SettingsLayout(Widget):
       self._panels[self._current_panel].instance.hide_event()
       self._current_panel = panel_type
       self._panels[self._current_panel].instance.show_event()
+
+  def open_preap_settings(self):
+    self.set_current_panel(PanelType.NAP)
 
   def show_event(self):
     super().show_event()

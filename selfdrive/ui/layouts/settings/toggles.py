@@ -1,7 +1,9 @@
+from collections.abc import Callable
+
 from cereal import log
 from openpilot.common.params import Params, UnknownKeyName
 from openpilot.system.ui.widgets import Widget
-from openpilot.system.ui.widgets.list_view import multiple_button_item, toggle_item
+from openpilot.system.ui.widgets.list_view import button_item, multiple_button_item, toggle_item
 from openpilot.system.ui.widgets.scroller_tici import Scroller
 from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
 from openpilot.system.ui.lib.application import gui_app
@@ -35,10 +37,11 @@ DESCRIPTIONS = {
 
 
 class TogglesLayout(Widget):
-  def __init__(self):
+  def __init__(self, open_preap_settings: Callable[[], None] | None = None):
     super().__init__()
     self._params = Params()
     self._is_release = self._params.get_bool("IsReleaseBranch")
+    self._open_preap_settings = open_preap_settings
 
     # param, title, desc, icon, needs_restart
     self._toggle_defs = {
@@ -135,8 +138,20 @@ class TogglesLayout(Widget):
       if param == "DisengageOnAccelerator":
         self._toggles["LongitudinalPersonality"] = self._long_personality_setting
 
+    self._items = []
+    if self._open_preap_settings is not None:
+      self._preap_settings_btn = button_item(
+        "Pre-AP Tesla",
+        "Open",
+        description="Configure Pre-AP Tesla hardware, calibration, radar, and firmware tools.",
+        callback=self._open_preap_settings,
+      )
+      self._items.append(self._preap_settings_btn)
+
+    self._items.extend(self._toggles.values())
+
     self._update_experimental_mode_icon()
-    self._scroller = Scroller(list(self._toggles.values()), line_separator=True, spacing=0)
+    self._scroller = Scroller(self._items, line_separator=True, spacing=0)
 
     ui_state.add_engaged_transition_callback(self._update_toggles)
 
