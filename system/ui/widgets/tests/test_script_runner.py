@@ -2,7 +2,7 @@ import queue
 import subprocess
 import sys
 
-from openpilot.system.ui.widgets.script_runner import drain_stream_to_queue
+from openpilot.system.ui.widgets.script_runner import drain_stream_to_queue, follow_bottom_offset
 
 
 def _drain(proc):
@@ -29,6 +29,15 @@ def test_drain_captures_final_burst_after_process_exits():
   assert "*** RESULTS" in out
   assert out[-1] == "- finding"
   assert len(out) == 52
+
+
+def test_follow_bottom_pins_only_while_new_output_arrives():
+  # Overflowing content with a new line: pin to the bottom (tail live output).
+  assert follow_bottom_offset(1000, 600, line_count=20, last_count=19) == -400
+  # Same content, no new line: leave the scroll alone so the user can scroll up.
+  assert follow_bottom_offset(1000, 600, line_count=20, last_count=20) is None
+  # Content fits on screen: nothing to follow.
+  assert follow_bottom_offset(400, 600, line_count=8, last_count=7) is None
 
 
 def test_drain_preserves_blank_lines():

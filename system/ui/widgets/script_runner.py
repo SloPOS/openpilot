@@ -44,6 +44,21 @@ def drain_stream_to_queue(stream, out_queue) -> None:
       out_queue.put(line.rstrip())
 
 
+def follow_bottom_offset(content_height: float, view_height: float, line_count: int, last_count: int) -> float | None:
+  """Scroll offset to pin the view to the bottom, but ONLY while new output arrives.
+
+  Returns the bottom offset when the content overflows and a new line was just
+  added; otherwise None, meaning "leave the scroll alone." Pinning every frame
+  (the old behavior) made the view un-scrollable: any drag-up was yanked back to
+  the bottom on the next frame, so a long output's top (the findings) was
+  unreachable. Following only on growth lets the view tail live output, then
+  hand control back to the user once the script finishes.
+  """
+  if content_height > view_height and line_count != last_count:
+    return -(content_height - view_height)
+  return None
+
+
 class ScriptState:
   """Script execution states"""
   READY = 0      # Showing instructions, waiting for Start
@@ -89,6 +104,7 @@ class ScriptRunner(Widget):
 
     # UI components
     self._scroll_panel = GuiScrollPanel()
+    self._last_rendered_lines = 0
     self._font = gui_app.font(FontWeight.NORMAL)
     self._title_font = gui_app.font(FontWeight.BOLD)
 
@@ -292,9 +308,11 @@ class ScriptRunner(Widget):
     content_height = len(self._output_lines) * LINE_HEIGHT
     content_rect = rl.Rectangle(0, 0, content_width, content_height)
 
-    # Auto-scroll to bottom when new content arrives
-    if content_height > output_area_height:
-      self._scroll_panel._offset_filter_y.x = -(content_height - output_area_height)
+    # Follow the bottom only while new output arrives, then let the user scroll.
+    offset = follow_bottom_offset(content_height, output_area_height, len(self._output_lines), self._last_rendered_lines)
+    if offset is not None:
+      self._scroll_panel._offset_filter_y.x = offset
+    self._last_rendered_lines = len(self._output_lines)
 
     # Get scroll offset
     scroll = self._scroll_panel.update(output_rect, content_rect)
@@ -436,6 +454,7 @@ class ScriptActionRunner(Widget):
     self._reader_thread: threading.Thread | None = None
 
     self._scroll_panel = GuiScrollPanel()
+    self._last_rendered_lines = 0
     self._font = gui_app.font(FontWeight.NORMAL)
     self._title_font = gui_app.font(FontWeight.BOLD)
     self._instruction_lines: list[str] = []
@@ -627,8 +646,11 @@ class ScriptActionRunner(Widget):
 
     content_height = len(self._output_lines) * LINE_HEIGHT
     content_rect = rl.Rectangle(0, 0, content_width, content_height)
-    if content_height > output_area_height:
-      self._scroll_panel._offset_filter_y.x = -(content_height - output_area_height)
+    # Follow the bottom only while new output arrives, then let the user scroll.
+    offset = follow_bottom_offset(content_height, output_area_height, len(self._output_lines), self._last_rendered_lines)
+    if offset is not None:
+      self._scroll_panel._offset_filter_y.x = offset
+    self._last_rendered_lines = len(self._output_lines)
 
     scroll = self._scroll_panel.update(output_rect, content_rect)
 
